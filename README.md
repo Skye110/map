@@ -56,3 +56,5 @@ If you see geopandas, shapely, pyproj, flask — you’re golden.
 💫 Done
 You’re now running a clean, isolated environment where your graph algorithms, shapefiles, and Flask setup won’t explode randomly.
 If you want, I can also make you a requirements.txt for this entire project.
+https://download.geofabrik.de/asia/mongolia.html 
+download the MONGOLIA map data set
