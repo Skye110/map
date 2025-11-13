@@ -26,7 +26,6 @@ def nearest_node(graph, x, y):
 @app.route("/")
 def home():
     return render_template("index.html")
-
 @app.route("/route")
 def route():
     src = request.args.get("src")
