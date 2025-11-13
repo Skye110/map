@@ -8,8 +8,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("routefinder")
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
-
-SHP_PATH = os.environ.get("OSM_SHP", "D:/3r_kurs/4-2/map/gis_osm_roads_free_1.shp")
+SHP_PATH = os.environ.get("OSM_SHP", "mongolia-251026-free/gis_osm_roads_free_1.shp")
 log.info("Main: loading graph from %s", SHP_PATH)
 G, graph_crs = build_graph_from_shp(SHP_PATH)
 log.info("Main: graph loaded: nodes=%d adj_entries=%d", len(G.node_coords), sum(len(v) for v in G.adj.values()))
@@ -73,17 +72,14 @@ def route():
     note = None
     
     try:
-        # --- ALL: enumerate multiple paths ---
         if mode == "all":
             if alg and alg != "dfs":
                 note = f"'{alg}' requested, using DFS enumeration for finding multiple paths."
-            
-            # Auto-calculate weight limit if not provided
             if max_weight is None:
                 try:
                     _, dist = dijkstra(G, s, t)
                     if dist and dist != float("inf"):
-                        max_weight = dist * 1.5  # Allow 50% longer paths
+                        max_weight = dist * 1.5
                 except:
                     pass
             
@@ -104,7 +100,6 @@ def route():
                 "note": note
             })
 
-        # --- FEWEST EDGES (minsteps) ---
         if mode == "minsteps":
             if alg in ("", "bfs"):
                 path_nodes = bfs_shortest(G, s, t)
@@ -128,7 +123,6 @@ def route():
             coords = [G.node_lonlat[n] for n in path_nodes]
             return jsonify({"mode": "minsteps", "algorithm": used_alg, "path": coords, "note": note})
 
-        # --- SHORTEST (distance) ---
         if mode == "shortest":
             if alg in ("", "dijkstra"):
                 path_nodes, dist = dijkstra(G, s, t)
@@ -190,7 +184,6 @@ def compare():
 
     results = []
     
-    # Shortest with Dijkstra
     try:
         path_nodes, dist = dijkstra(G, s, t)
         if path_nodes:
@@ -206,7 +199,6 @@ def compare():
     except Exception as ex:
         results.append({"mode": "shortest", "error": str(ex)})
     
-    # Minsteps with BFS
     try:
         path_nodes = bfs_shortest(G, s, t)
         if path_nodes:
@@ -221,7 +213,6 @@ def compare():
     except Exception as ex:
         results.append({"mode": "minsteps", "error": str(ex)})
     
-    # All paths
     try:
         _, dist = dijkstra(G, s, t)
         max_weight = dist * 1.5 if dist and dist != float("inf") else None

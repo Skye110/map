@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>UB Route Finder — Монгол</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="static/style.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -387,12 +387,10 @@ function redrawAllVisible(){
           );
         }
       });
-      
       legendContent.appendChild(legendGroup);
       console.log(`Added ${r.paths.length} paths to map for ${k}`);
       
     } else if(r.path && r.path.length > 0){
-      // Single path mode (shortest/minsteps)
       console.log(`Drawing single path for ${k}: ${r.path.length} coordinates`);
       
       const latlngs = r.path.map(pt => [pt[1], pt[0]]);
@@ -405,7 +403,6 @@ function redrawAllVisible(){
       
       routeLayers[k].push(poly);
       
-      // Start marker
       routeLayers[k].push(
         L.circleMarker(latlngs[0], { 
           radius:6, 
@@ -430,13 +427,10 @@ function redrawAllVisible(){
       console.warn(`No path data for ${k}:`, r);
     }
   }
-  
-  // Show/hide legend based on whether we have multiple paths
   legendBox.style.display = hasMultiplePaths ? 'block' : 'none';
   console.log(`Legend display: ${legendBox.style.display}, hasMultiplePaths: ${hasMultiplePaths}`);
 }
 
-/* API call */
 async function callRoute(alg, mode, max_paths, max_depth, max_weight){
   if(markers.length < 2){ 
     alert('Эхлэл болон төгсгөл байрлуулаагүй байна.'); 
@@ -464,7 +458,6 @@ async function callRoute(alg, mode, max_paths, max_depth, max_weight){
   return res.json();
 }
 
-/* Run button */
 document.getElementById('runReplace').onclick = async () => {
   const alg = document.getElementById('algSelect').value;
   const mode = document.getElementById('modeSelect').value;
@@ -526,7 +519,6 @@ document.getElementById('runReplace').onclick = async () => {
     redrawAllVisible();
     updateChartFromStore();
 
-    // Clear markers
     markers.forEach(m => map.removeLayer(m));
     markers = [];
 
@@ -534,7 +526,6 @@ document.getElementById('runReplace').onclick = async () => {
     if(entry.count) successMsg += ` — <strong>${entry.count} зам олдсон</strong>`;
     if(entry.distance) successMsg += ` (${Math.round(entry.distance)}м)`;
     
-    // Show all path weights for 'all' mode
     if(entry.mode === 'all' && entry.paths && entry.paths.length > 1){
       successMsg += '<br><small style="color: #90caf9;">Замууд: ';
       successMsg += entry.paths.map((p, i) => `${i+1}. ${Math.round(p.weight)}м`).join(', ');
@@ -550,7 +541,6 @@ document.getElementById('runReplace').onclick = async () => {
   }
 };
 
-/* Compare button */
 document.getElementById('compare').onclick = async () => {
   if(markers.length < 2){ 
     alert('Эхлэл болон төгсгөл байрлуулаагүй байна.'); 
@@ -609,7 +599,6 @@ document.getElementById('compare').onclick = async () => {
   }
 };
 
-/* Clear button */
 document.getElementById('clear').onclick = () => {
   for(const k in routeLayers) routeLayers[k].forEach(l => map.removeLayer(l));
   routeLayers = {};
