@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8" />
+  <title>UB Route Finder — Монгол</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="control-panel">
+    <h2>Улаанбаатар Зам Тодруулах</h2>
+
+    <div class="control-group">
+      <label for="algSelect">Алгоритм</label>
+      <select id="algSelect">
+        <option value="dijkstra">Dijkstra (Хамгийн богино)</option>
+        <option value="bfs">BFS (Цөөн алхам)</option>
+        <option value="dfs">DFS (Эхний зам)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label for="modeSelect">Горим</label>
+      <select id="modeSelect">
+        <option value="shortest">Хамгийн богино зай</option>
+        <option value="minsteps">Хамгийн цөөн алхам</option>
+        <option value="all">Олон зам харах (удаан)</option>
+      </select>
+    </div>
+
+    <div id="advanced-controls" style="display:none;">
+      <h4 style="margin: 12px 0 6px; font-size: 14px;">Нарийвчилсан тохиргоо</h4>
+      <div class="control-row">
+        <div class="control-col">
+          <label>Замын тоо</label>
+          <input id="max_paths" type="number" min="1" max="200" value="50" />
+        </div>
+        <div class="control-col">
+          <label>Хамгийн их гүн</label>
+          <input id="max_depth" type="number" min="10" max="5000" value="500" />
+        </div>
+      </div>
+      <div class="control-group">
+        <label>Хамгийн их зай (метр, хоосон = авто)</label>
+        <input id="max_weight" type="number" step="1000" placeholder="Автоматаар тооцоолно" />
+      </div>
+      <div style="background: rgba(33,150,243,0.1); border-left: 3px solid #2196f3; padding: 8px; margin-top: 8px; border-radius: 4px; font-size: 12px;">
+        ℹ️ "Олон зам" горим олон хувилбар олохыг оролдоно. Хол зай сонговол удаан ажиллана.
+      </div>
+    </div>
+
+    <button id="toggleAdvanced" style="background: #555; margin-top: 8px;">
+      Нарийвчилсан тохиргоо харуулах
+    </button>
+
+    <div class="button-group">
+      <button id="runReplace" class="btn-primary">Гүйцэтгэх</button>
+      <button id="compare" class="btn-success">Харьцуулах</button>
+      <button id="clear" class="btn-danger">Цэвэрлэх</button>
+    </div>
+
+    <div id="status" class="status-box">
+      <div id="result">Газрын зураг дээр Эхлэл, дараа Төгсгөл-ийг дарна уу</div>
+      <div id="progress" style="display:none; margin-top: 8px;">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div id="progressText" style="font-size: 12px; margin-top: 4px; text-align: center;"></div>
+      </div>
+    </div>
+
+    <div class="panel-block">
+      <h4>Хадгалсан үр дүн</h4>
+      <div id="savedList" class="saved-list"></div>
+    </div>
+
+    <div id="paths-legend" class="panel-block" style="display:none;">
+      <h4>Олдсон замууд</h4>
+      <div id="pathsLegendContent"></div>
+    </div>
+
+    <div class="panel-block">
+      <h4>Олдсон замуудын тоо</h4>
+      <canvas id="perfChart" width="280" height="140"></canvas>
+    </div>
+  </div>
+
+<script>
+/* Map initialization */
+const map = L.map('map').setView([47.918, 106.917], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
+  maxZoom: 18,
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
+
+let markers = [];
+let routeLayers = {};
+let resultsStore = {};
+const palette = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#d2f53c','#fabebe'];
+
+function keyFor(alg, mode){ return `${alg}|${mode}`; }
+function colorForKey(k){ 
+  let h=0; 
+  for(let i=0;i<k.length;i++) h=(h*31 + k.charCodeAt(i))|0; 
+  return palette[Math.abs(h) % palette.length]; 
+}
+
+/* Chart.js */
+const ctx = document.getElementById('perfChart').getContext('2d');
+const chart = new Chart(ctx, { 
+  type:'bar', 
+  data:{ 
+    labels: [], 
+    datasets:[{ 
+      label:'Замын тоо', 
+      data: [], 
+      backgroundColor: [] 
+    }] 
+  }, 
+  options:{ 
+    responsive:true, 
+    maintainAspectRatio: false,
+    scales:{ 
+      y:{ 
+        beginAtZero:true,
+        title: { display: true, text: 'Олдсон замын тоо' }
+      } 
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: function(context) {
+            const key = context.label;
+            const r = resultsStore[key];
+            if(r && r.paths && r.paths.length > 1) {
+              return `${r.paths.length} зам (${r.paths.map(p => Math.round(p.weight) + 'м').join(', ')})`;
+            }
+            return `${context.parsed.y} зам`;
+          }
+        }
+      }
+    }
+  } 
+});
+
+function updateChartFromStore(){
+  const keys = Object.keys(resultsStore);
+  chart.data.labels = keys;
+  chart.data.datasets[0].data = keys.map(k => {
+    const r = resultsStore[k];
+    // Show number of paths found
+    if(r.paths && r.paths.length > 0) return r.paths.length;
+    if(r.path) return 1;
+    return 0;
+  });
+  chart.data.datasets[0].backgroundColor = keys.map(k => resultsStore[k].color);
+  chart.update();
+}
+
+/* Advanced controls toggle */
+document.getElementById('toggleAdvanced').onclick = () => {
+  const adv = document.getElementById('advanced-controls');
+  const btn = document.getElementById('toggleAdvanced');
+  if(adv.style.display === 'none'){
+    adv.style.display = 'block';
+    btn.innerText = 'Нарийвчилсан тохиргоо нуух';
+  } else {
+    adv.style.display = 'none';
+    btn.innerText = 'Нарийвчилсан тохиргоо харуулах';
+  }
+};
+
+/* Mode change - show/hide advanced controls */
+document.getElementById('modeSelect').onchange = () => {
+  const mode = document.getElementById('modeSelect').value;
+  const adv = document.getElementById('advanced-controls');
+  const btn = document.getElementById('toggleAdvanced');
+  
+  if(mode === 'all'){
+    adv.style.display = 'block';
+    btn.style.display = 'none';
+  } else {
+    adv.style.display = 'none';
+    btn.style.display = 'block';
+  }
+};
+
+/* Progress indicator */
+function showProgress(text){
+  document.getElementById('progress').style.display = 'block';
+  document.getElementById('progressText').innerText = text;
+  let width = 0;
+  const fill = document.getElementById('progressFill');
+  const interval = setInterval(() => {
+    width += 5;
+    if(width > 90) width = 90;
+    fill.style.width = width + '%';
+  }, 500);
+  return interval;
+}
+
+function hideProgress(interval){
+  clearInterval(interval);
+  const fill = document.getElementById('progressFill');
+  fill.style.width = '100%';
+  setTimeout(() => {
+    document.getElementById('progress').style.display = 'none';
+    fill.style.width = '0%';
+  }, 500);
+}
+
+/* Marker behavior */
+function addMarker(latlng, label){
+  const m = L.marker(latlng).addTo(map).bindPopup(label).openPopup();
+  markers.push(m);
+}
+
+map.on('click', e=>{
+  if(markers.length === 0){
+    addMarker(e.latlng, 'Эхлэл');
+    document.getElementById('result').innerText = 'Эхлэл байрлуулсан. Төгсгөл сонгоно уу.';
+    return;
+  }
+  if(markers.length === 1){
+    addMarker(e.latlng, 'Төгсгөл');
+    document.getElementById('result').innerText = 'Төгсгөл байрлуулсан. "Гүйцэтгэх" дарна уу.';
+    return;
+  }
+  // Clear and start new pair
+  markers.forEach(m=>map.removeLayer(m)); 
+  markers = []; 
+  addMarker(e.latlng, 'Эхлэл');
+  document.getElementById('result').innerText='Шинэ эхлэл байрлуулсан. Төгсгөл сонгоно уу.';
+});
+
+/* Render saved list */
+function renderSavedList(){
+  const box = document.getElementById('savedList'); 
+  box.innerHTML = '';
+  const keys = Object.keys(resultsStore);
+  
+  if(keys.length === 0){ 
+    box.innerHTML = '<div style="color: #888; text-align: center; padding: 12px;">Хадгалсан үр дүн алга</div>'; 
+    return; 
+  }
+  
+  keys.forEach(k=>{
+    const r = resultsStore[k];
+    const row = document.createElement('div'); 
+    row.className = 'saved-row';
+    
+    const distText = r.distance ? `| ${Math.round(r.distance)}м` : '';
+    const countText = r.count ? `| ${r.count} зам` : '';
+    const pathsText = (r.mode === 'all' && r.paths) ? `(${r.paths.length} хувилбар)` : '';
+    
+    row.innerHTML = `
+      <div class="saved-left">
+        <span class="swatch" style="background:${r.color}"></span>
+        <div>
+          <div class="lbl">${r.algorithm} • ${r.mode} ${pathsText}</div>
+          <div class="meta">${distText} ${countText}</div>
+        </div>
+      </div>
+      <div class="saved-actions">
+        <button data-key="${k}" class="toggle-btn btn-sm">${r.visible ? 'Нуух':'Харах'}</button>
+        <button data-key="${k}" class="delete-btn btn-sm">×</button>
+      </div>`;
+    box.appendChild(row);
+  });
+
+  box.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.onclick = e => {
+      const key = e.target.dataset.key;
+      resultsStore[key].visible = !resultsStore[key].visible;
+      e.target.innerText = resultsStore[key].visible ? 'Нуух':'Харах';
+      redrawAllVisible();
+    };
+  });
+
+  box.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.onclick = e => {
+      const key = e.target.dataset.key;
+      if(routeLayers[key]) routeLayers[key].forEach(l => map.removeLayer(l));
+      delete routeLayers[key];
+      delete resultsStore[key];
+      renderSavedList();
+      updateChartFromStore();
+    };
+  });
+}
+
+/* Draw visible routes */
+function redrawAllVisible(){
+  console.log('redrawAllVisible called, resultsStore:', resultsStore);
+  
+  for(const k in routeLayers){
+    routeLayers[k].forEach(l => map.removeLayer(l));
+  }
+  routeLayers = {};
+  
+  // Clear paths legend
+  const legendBox = document.getElementById('paths-legend');
+  const legendContent = document.getElementById('pathsLegendContent');
+  legendContent.innerHTML = '';
+  let hasMultiplePaths = false;
+  
+  for(const k in resultsStore){
+    console.log(`Processing key: ${k}, visible: ${resultsStore[k].visible}`);
+    
+    if(!resultsStore[k].visible) continue;
+    const r = resultsStore[k];
+    
+    routeLayers[k] = [];
+    
+    // Handle 'all' mode - draw ALL paths found
+    if(r.mode === 'all' && r.paths && r.paths.length > 0){
+      console.log(`Drawing ${r.paths.length} paths for ${k}`);
+      hasMultiplePaths = true;
+      
+      // Create legend entries
+      const legendGroup = document.createElement('div');
+      legendGroup.style.marginBottom = '12px';
+      legendGroup.innerHTML = `<strong style="color: ${r.color};">${r.algorithm}</strong>`;
+      
+      // Draw each alternative path
+      r.paths.forEach((pathData, idx) => {
+        console.log(`  Path ${idx + 1}: ${pathData.path.length} coordinates, weight: ${pathData.weight}`);
+        
+        const latlngs = pathData.path.map(pt => [pt[1], pt[0]]);
+        if(!latlngs || latlngs.length === 0){
+          console.warn(`  Path ${idx + 1} has no coordinates!`);
+          return;
+        }
+        
+        // Use slightly different shades for each path
+        const opacity = 1 - (idx * 0.1); // Fade subsequent paths
+        const weight = idx === 0 ? 5 : 3;
+        
+        console.log(`  Drawing path ${idx + 1} with ${latlngs.length} points, opacity: ${Math.max(opacity, 0.4)}`);
+        
+        const poly = L.polyline(latlngs, { 
+          color: r.color, 
+          weight: weight,
+          opacity: Math.max(opacity, 0.4),
+          dashArray: idx === 0 ? null : '10, 5' // Dash non-primary routes
+        }).addTo(map);
+        
+        // Add popup showing path info
+        poly.bindPopup(`<b>Зам ${idx + 1}</b><br>Зай: ${Math.round(pathData.weight)}м<br>Алхамууд: ${latlngs.length}`);
+        
+        routeLayers[k].push(poly);
+        
+        // Add to legend
+        const legendItem = document.createElement('div');
+        legendItem.className = 'path-legend-item';
+        legendItem.innerHTML = `
+          <span class="path-swatch" style="background:${r.color}; opacity:${Math.max(opacity, 0.4)}; ${idx > 0 ? 'border: 1px dashed #fff;' : ''}"></span>
+          <span>Зам ${idx + 1}: ${Math.round(pathData.weight)}м (${latlngs.length} цэг)</span>
+        `;
+        legendGroup.appendChild(legendItem);
+        
+        // Only add markers to first path
+        if(idx === 0){
+          routeLayers[k].push(
+            L.circleMarker(latlngs[0], { 
+              radius:7, 
+              fillColor:r.color, 
+              color:'#fff', 
+              weight:2, 
+              fillOpacity:1 
+            }).addTo(map).bindPopup('Эхлэл')
+          );
+          
+          routeLayers[k].push(
+            L.circleMarker(latlngs[latlngs.length-1], { 
+              radius:7, 
+              fillColor:'#fff', 
+              color:r.color, 
+              weight:2, 
+              fillOpacity:1 
+            }).addTo(map).bindPopup('Төгсгөл')
+          );
+        }
+      });
+      
+      legendContent.appendChild(legendGroup);
+      console.log(`Added ${r.paths.length} paths to map for ${k}`);
+      
+    } else if(r.path && r.path.length > 0){
+      // Single path mode (shortest/minsteps)
+      console.log(`Drawing single path for ${k}: ${r.path.length} coordinates`);
+      
+      const latlngs = r.path.map(pt => [pt[1], pt[0]]);
+      
+      const poly = L.polyline(latlngs, { 
+        color: r.color, 
+        weight: 4,
+        opacity: 0.7
+      }).addTo(map);
+      
+      routeLayers[k].push(poly);
+      
+      // Start marker
+      routeLayers[k].push(
+        L.circleMarker(latlngs[0], { 
+          radius:6, 
+          fillColor:r.color, 
+          color:'#fff', 
+          weight:2, 
+          fillOpacity:1 
+        }).addTo(map).bindPopup('Эхлэл')
+      );
+      
+      // End marker
+      routeLayers[k].push(
+        L.circleMarker(latlngs[latlngs.length-1], { 
+          radius:6, 
+          fillColor:'#fff', 
+          color:r.color, 
+          weight:2, 
+          fillOpacity:1 
+        }).addTo(map).bindPopup('Төгсгөл')
+      );
+    } else {
+      console.warn(`No path data for ${k}:`, r);
+    }
+  }
+  
+  // Show/hide legend based on whether we have multiple paths
+  legendBox.style.display = hasMultiplePaths ? 'block' : 'none';
+  console.log(`Legend display: ${legendBox.style.display}, hasMultiplePaths: ${hasMultiplePaths}`);
+}
+
+/* API call */
+async function callRoute(alg, mode, max_paths, max_depth, max_weight){
+  if(markers.length < 2){ 
+    alert('Эхлэл болон төгсгөл байрлуулаагүй байна.'); 
+    return null; 
+  }
+  
+  const src = markers[0].getLatLng(), dst = markers[1].getLatLng();
+  const params = new URLSearchParams();
+  params.set('src', `${src.lng},${src.lat}`);
+  params.set('dst', `${dst.lng},${dst.lat}`);
+  params.set('mode', mode);
+  params.set('alg', alg);
+  if(max_paths) params.set('max_paths', String(max_paths));
+  if(max_depth) params.set('max_depth', String(max_depth));
+  if(max_weight) params.set('max_weight', String(max_weight));
+  
+  const url = '/route?' + params.toString();
+  const res = await fetch(url);
+  
+  if(!res.ok){
+    const txt = await res.text().catch(()=>res.statusText);
+    throw new Error(txt || res.statusText);
+  }
+  
+  return res.json();
+}
+
+/* Run button */
+document.getElementById('runReplace').onclick = async () => {
+  const alg = document.getElementById('algSelect').value;
+  const mode = document.getElementById('modeSelect').value;
+  const max_paths = Number(document.getElementById('max_paths').value) || null;
+  const max_depth = Number(document.getElementById('max_depth').value) || null;
+  const max_weight_val = document.getElementById('max_weight').value;
+  const max_weight = max_weight_val ? Number(max_weight_val) : null;
+
+  const progressInterval = showProgress(`${alg} | ${mode} ажиллаж байна...`);
+  document.getElementById('result').innerText = `${alg} | ${mode} тооцоолж байна...`;
+  
+  console.log(`Calling route: alg=${alg}, mode=${mode}, max_paths=${max_paths}, max_depth=${max_depth}, max_weight=${max_weight}`);
+
+  try {
+    const data = await callRoute(alg, mode, max_paths, max_depth, max_weight);
+    hideProgress(progressInterval);
+    
+    console.log('Route response:', data);
+    
+    if(!data) return;
+    
+    if(data.error){
+      let errorMsg = data.error;
+      if(data.message) errorMsg = data.message;
+      
+      document.getElementById('result').innerHTML = `<strong style="color: #f5424e;">⚠️ Алдаа:</strong> ${errorMsg}`;
+      if(data.note) document.getElementById('result').innerHTML += `<br><em>${data.note}</em>`;
+      return;
+    }
+
+    const storeKey = keyFor(alg, mode);
+    const color = colorForKey(storeKey);
+    
+    console.log('Processing result:', {
+      mode: data.mode,
+      paths: data.paths ? data.paths.length : 0,
+      path: data.path ? data.path.length : 0
+    });
+    
+    const entry = {
+      algorithm: data.algorithm || alg,
+      mode: data.mode || mode,
+      time_ms: data.time_ms || 0,
+      distance: data.distance || null,
+      path: data.path || null,
+      paths: data.paths || null,
+      count: data.count || null,
+      visible: true,
+      color
+    };
+    if(data.note) entry.note = data.note;
+
+    resultsStore[storeKey] = entry;
+    
+    console.log('Stored entry:', entry);
+    console.log('resultsStore keys:', Object.keys(resultsStore));
+    
+    renderSavedList();
+    redrawAllVisible();
+    updateChartFromStore();
+
+    // Clear markers
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+
+    let successMsg = `<strong style="color: #4caf50;">✓</strong> ${entry.algorithm} • ${entry.mode}`;
+    if(entry.count) successMsg += ` — <strong>${entry.count} зам олдсон</strong>`;
+    if(entry.distance) successMsg += ` (${Math.round(entry.distance)}м)`;
+    
+    // Show all path weights for 'all' mode
+    if(entry.mode === 'all' && entry.paths && entry.paths.length > 1){
+      successMsg += '<br><small style="color: #90caf9;">Замууд: ';
+      successMsg += entry.paths.map((p, i) => `${i+1}. ${Math.round(p.weight)}м`).join(', ');
+      successMsg += '</small>';
+    }
+    
+    const noteText = data.note ? `<br><em style="color: #64b5f6;">${data.note}</em>` : '';
+    document.getElementById('result').innerHTML = successMsg + noteText;
+  } catch (err) {
+    hideProgress(progressInterval);
+    alert(err.message);
+    document.getElementById('result').innerHTML = `<strong style="color: #f5424e;">Алдаа:</strong> ${err.message}`;
+  }
+};
+
+/* Compare button */
+document.getElementById('compare').onclick = async () => {
+  if(markers.length < 2){ 
+    alert('Эхлэл болон төгсгөл байрлуулаагүй байна.'); 
+    return; 
+  }
+  
+  const progressInterval = showProgress('Харьцуулалт ажиллаж байна...');
+  document.getElementById('result').innerText = 'Харьцуулалт ажиллаж байна...';
+  
+  try {
+    const src = markers[0].getLatLng(), dst = markers[1].getLatLng();
+    const url = `/compare?src=${src.lng},${src.lat}&dst=${dst.lng},${dst.lat}`;
+    const res = await fetch(url);
+    
+    hideProgress(progressInterval);
+    
+    if(!res.ok){ 
+      const t = await res.text().catch(()=>res.statusText); 
+      throw new Error(t || res.statusText); 
+    }
+    
+    const arr = await res.json();
+    
+    for(const r of arr){
+      if(!r || r.error) continue;
+      const algLabel = r.algorithm || (r.mode === 'shortest' ? 'Dijkstra' : (r.mode === 'minsteps' ? 'BFS' : 'DFS'));
+      const mode = r.mode || 'shortest';
+      const key = keyFor(algLabel, mode); 
+      const color = colorForKey(key);
+      const entry = { 
+        algorithm: algLabel, 
+        mode, 
+        time_ms: r.time_ms || 0, 
+        distance: r.distance || null, 
+        path: r.path || null, 
+        paths: r.paths || null,
+        count: r.count || null,
+        visible:true, 
+        color 
+      };
+      if(r.note) entry.note = r.note;
+      resultsStore[key] = entry;
+    }
+    
+    markers.forEach(m => map.removeLayer(m)); 
+    markers = [];
+
+    renderSavedList(); 
+    redrawAllVisible(); 
+    updateChartFromStore();
+    document.getElementById('result').innerHTML = '<strong style="color: #4caf50;">✓</strong> Харьцуулалт дууссан';
+  } catch(err){
+    hideProgress(progressInterval);
+    alert(err.message);
+    document.getElementById('result').innerHTML = `<strong style="color: #f5424e;">Алдаа:</strong> ${err.message}`;
+  }
+};
+
+/* Clear button */
+document.getElementById('clear').onclick = () => {
+  for(const k in routeLayers) routeLayers[k].forEach(l => map.removeLayer(l));
+  routeLayers = {};
+  resultsStore = {};
+  renderSavedList();
+  markers.forEach(m => map.removeLayer(m)); 
+  markers = [];
+  chart.data.labels = []; 
+  chart.data.datasets[0].data = []; 
+  chart.update();
+  document.getElementById('result').innerText = 'Бүх зүйл цэвэрлэгдлээ';
+};
+
+renderSavedList();
+updateChartFromStore();
+</script>
+</body>
+</html>
