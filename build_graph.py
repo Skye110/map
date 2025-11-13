@@ -7,14 +7,9 @@ from pyproj import Transformer
 SNAP_TOLERANCE = 1e-6
 
 def round_coord(coord, tol=SNAP_TOLERANCE):
-    """Round coordinate to tolerance for node deduplication."""
     return (round(coord[0]/tol)*tol, round(coord[1]/tol)*tol)
 
 class Graph:
-    """
-    Graph data structure for road network.
-    Uses adjacency list representation with edge weights.
-    """
     def __init__(self):
         self.adj = defaultdict(list)  # node_id -> [(neighbor_id, weight, metadata)]
         self.coord_to_node = {}  # rounded_coord -> node_id
